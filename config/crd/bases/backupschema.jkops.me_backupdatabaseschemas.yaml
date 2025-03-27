@@ -18,8 +18,14 @@ spec:
     - jsonPath: .status.lastBackupTime
       name: LastBackupTime
       type: string
+    - jsonPath: .status.backupLocation
+      name: BackupLocation
+      type: string
     - jsonPath: .status.backupStatus
       name: BackupStatus
+      type: string
+    - jsonPath: .status.lastBackupJob
+      name: LastBackupJob
       type: string
     name: v1
     schema:

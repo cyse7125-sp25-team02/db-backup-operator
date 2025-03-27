@@ -32,55 +32,61 @@ type BackupDatabaseSchemaReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
 func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+    log := log.FromContext(ctx)
 
-	backup := &backupschemav1.BackupDatabaseSchema{}
-	if err := r.Get(ctx, req.NamespacedName, backup); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
+    backup := &backupschemav1.BackupDatabaseSchema{}
+    if err := r.Get(ctx, req.NamespacedName, backup); err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
 
-	cronJobName := fmt.Sprintf("backup-%s", backup.Name)
-	cronJob := &batchv1.CronJob{}
-	err := r.Get(ctx, types.NamespacedName{Name: cronJobName, Namespace: backup.Spec.BackupJobNamespace}, cronJob)
-	if err != nil && client.IgnoreNotFound(err) != nil {
-		log.Error(err, "Failed to get CronJob")
-		return ctrl.Result{}, err
-	}
+    cronJobName := fmt.Sprintf("backup-%s", backup.Name)
+    cronJob := &batchv1.CronJob{}
+    err := r.Get(ctx, types.NamespacedName{Name: cronJobName, Namespace: backup.Spec.BackupJobNamespace}, cronJob)
+    if err != nil && client.IgnoreNotFound(err) != nil {
+        log.Error(err, "Failed to get CronJob")
+        return ctrl.Result{}, err
+    }
 
-	if err != nil {
-		newCronJob, err := r.createBackupCronJob(backup)
-		if err != nil {
-			log.Error(err, "Failed to create backup CronJob")
-			return ctrl.Result{}, err
-		}
-		if err := r.Create(ctx, newCronJob); err != nil {
-			log.Error(err, "Failed to create backup CronJob")
-			return ctrl.Result{}, err
-		}
-		log.Info("Created backup CronJob", "cronJobName", cronJobName)
-	}
+    if err != nil {
+        newCronJob, err := r.createBackupCronJob(backup)
+        if err != nil {
+            log.Error(err, "Failed to create backup CronJob")
+            return ctrl.Result{}, err
+        }
+        if err := r.Create(ctx, newCronJob); err != nil {
+            log.Error(err, "Failed to create backup CronJob")
+            return ctrl.Result{}, err
+        }
+        log.Info("Created backup CronJob", "cronJobName", cronJobName)
+    }
 
-	jobList := &batchv1.JobList{}
-	if err := r.List(ctx, jobList, client.InNamespace(backup.Spec.BackupJobNamespace), client.MatchingLabels{"cronjob-name": cronJobName}); err == nil {
-		for _, job := range jobList.Items {
-			if job.Status.CompletionTime != nil && (backup.Status.LastBackupTime == "" || job.Status.CompletionTime.Time.After(mustParseTime(backup.Status.LastBackupTime))) {
-				backup.Status.LastBackupTime = job.Status.CompletionTime.Time.UTC().Format(time.RFC3339)
-				backup.Status.BackupLocation = fmt.Sprintf("gs://%s/backup-%s-%d.sql", backup.Spec.GCSBucket, backup.Name, job.Status.CompletionTime.Unix())
-				backup.Status.LastBackupJob = job.Name
-				if job.Status.Succeeded > 0 {
-					backup.Status.BackupStatus = "Success"
-				} else if job.Status.Failed > 0 {
-					backup.Status.BackupStatus = "Failed"
-				}
-				if err := r.Status().Update(ctx, backup); err != nil {
-					log.Error(err, "Failed to update BackupDatabaseSchema status")
-					return ctrl.Result{}, err
-				}
-			}
-		}
-	}
+    log.Info("Reconciling BackupDatabaseSchema", "name", backup.Name)
+    jobList := &batchv1.JobList{}
+    if err := r.List(ctx, jobList, client.InNamespace(backup.Spec.BackupJobNamespace), client.MatchingLabels{"cronjob-name": cronJobName}); err == nil {
+        log.Info("Found jobs", "count", len(jobList.Items))
+        for _, job := range jobList.Items {
+            log.Info("Job details", "name", job.Name, "completed", job.Status.CompletionTime != nil, "succeeded", job.Status.Succeeded, "failed", job.Status.Failed)
+            if job.Status.CompletionTime != nil && (backup.Status.LastBackupTime == "" || job.Status.CompletionTime.Time.After(mustParseTime(backup.Status.LastBackupTime))) {
+                backup.Status.LastBackupTime = job.Status.CompletionTime.Time.UTC().Format(time.RFC3339)
+                backup.Status.BackupLocation = fmt.Sprintf("gs://%s/backup-%s-%d.sql", backup.Spec.GCSBucket, backup.Name, job.Status.CompletionTime.Unix())
+                backup.Status.LastBackupJob = job.Name
+                if job.Status.Succeeded > 0 {
+                    backup.Status.BackupStatus = "Success"
+                } else if job.Status.Failed > 0 {
+                    backup.Status.BackupStatus = "Failed"
+                }
+                log.Info("Updating status", "job", job.Name)
+                if err := r.Status().Update(ctx, backup); err != nil {
+                    log.Error(err, "Failed to update BackupDatabaseSchema status")
+                    return ctrl.Result{}, err
+                }
+            }
+        }
+    } else {
+        log.Error(err, "Failed to list jobs")
+    }
 
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+    return ctrl.Result{RequeueAfter: 10 * time.Second}, nil  // Reduced from 5m to 30s for testing
 }
 
 func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschemav1.BackupDatabaseSchema) (*batchv1.CronJob, error) {
@@ -136,9 +142,12 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 		Spec: batchv1.CronJobSpec{
 			Schedule:                cronSchedule,
 			ConcurrencyPolicy:       batchv1.AllowConcurrent,
-			SuccessfulJobsHistoryLimit: ptr.To[int32](3),
-			FailedJobsHistoryLimit:     ptr.To[int32](1),
+			SuccessfulJobsHistoryLimit: ptr.To[int32](10),
+			FailedJobsHistoryLimit:     ptr.To[int32](10),
 			JobTemplate: batchv1.JobTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"cronjob-name": fmt.Sprintf("backup-%s", backup.Name)},
+				},
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{

@@ -51,7 +51,9 @@ type BackupDatabaseSchemaStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="LastBackupTime",type="string",JSONPath=".status.lastBackupTime"
+// +kubebuilder:printcolumn:name="BackupLocation",type="string",JSONPath=".status.backupLocation"
 // +kubebuilder:printcolumn:name="BackupStatus",type="string",JSONPath=".status.backupStatus"
+// +kubebuilder:printcolumn:name="LastBackupJob",type="string",JSONPath=".status.lastBackupJob"
 // +kubebuilder:resource:scope=Namespaced
 
 // BackupDatabaseSchema is the Schema for the backupdatabaseschemas API
