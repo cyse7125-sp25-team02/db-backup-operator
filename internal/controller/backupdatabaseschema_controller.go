@@ -115,9 +115,12 @@ func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl
 			if job.Status.Succeeded > 0 {
 				backup.Status.BackupStatus = "Success"
 				
-				// Remove redundant prefix and use just the job name
-				fileName := fmt.Sprintf("%s.sql", strings.TrimPrefix(job.Name, "backup-db-backup-"))
-				backup.Status.BackupLocation = fmt.Sprintf("gs://%s/%s", backup.Spec.GCSBucket, fileName)
+				parts := strings.Split(job.Name, "-")
+				if len(parts) > 0 {
+					timestamp := parts[len(parts)-1]
+					fileName := fmt.Sprintf("%s.sql", timestamp)
+					backup.Status.BackupLocation = fmt.Sprintf("gs://%s/%s", backup.Spec.GCSBucket, fileName)
+				}
 			} else {
 				backup.Status.BackupStatus = "Failed"
 				backup.Status.BackupLocation = ""
@@ -139,9 +142,9 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 
 	// Use JOB_NAME and strip pod suffix to match job name
 	backupCommand := fmt.Sprintf(
-		"export JOB_NAME=$(echo $POD_NAME | sed 's/-[a-z0-9]*$//'); pg_dump -h %s -p %d -U %s -n %s %s | gsutil cp - gs://%s/%s.sql",
+		"export JOB_NAME=$(echo $POD_NAME | sed 's/-[a-z0-9]*$//'); timestamp=$(echo $JOB_NAME | awk -F'-' '{print $NF}'); pg_dump -h %s -p %d -U %s -n %s %s | gsutil cp - gs://%s/$timestamp.sql",
 		backup.Spec.DBHost, backup.Spec.DBPort, backup.Spec.DBUser,
-		backup.Spec.DBSchema, backup.Spec.DBName, backup.Spec.GCSBucket, "${JOB_NAME#backup-db-backup-}",
+		backup.Spec.DBSchema, backup.Spec.DBName, backup.Spec.GCSBucket,
 	)
 
 	container := corev1.Container{
