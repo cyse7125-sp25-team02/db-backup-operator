@@ -139,7 +139,7 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 
 	container := corev1.Container{
 		Name:    "backup",
-		Image:   "karanthakkar09/controller:latest",
+		Image:   "karanthakkar09/db-backup-operator:latest",
 		Command: []string{"/bin/sh", "-c"},
 		Args:    []string{backupCommand},
 		Env: []corev1.EnvVar{
