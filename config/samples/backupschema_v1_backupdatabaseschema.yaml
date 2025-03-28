@@ -1,0 +1,9 @@
+apiVersion: backupschema.jkops.me/v1
+kind: BackupDatabaseSchema
+metadata:
+  labels:
+    app.kubernetes.io/name: db-backup-operator-fork
+    app.kubernetes.io/managed-by: kustomize
+  name: backupdatabaseschema-sample
+spec:
+  # TODO(user): Add fields here

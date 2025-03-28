@@ -1,0 +1,45 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GITHUB_USERNAME', passwordVariable: 'GITHUB_TOKEN')]) {
+                    sh '''
+                        git remote set-url origin "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/cyse7125-sp25-team02/db-backup-operator.git"
+                        git fetch --no-tags origin master:master
+                        git fetch origin pull/${CHANGE_ID}/head:PR-${CHANGE_ID}
+                        git checkout PR-${CHANGE_ID}
+                    '''
+                }
+            }
+        }
+
+        stage('Determine Commit Range') {
+            steps {
+                script {
+                    env.PR_BASE_SHA = sh(script: 'git merge-base master HEAD', returnStdout: true).trim()
+                    env.PR_HEAD_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                }
+
+                sh "git log --oneline ${env.PR_BASE_SHA}..${env.PR_HEAD_SHA}"
+            }
+        }
+
+        stage('Validate Commits') {
+            steps {
+                sh '''
+                    echo "module.exports = {extends: ['@commitlint/config-conventional']};" > commitlint.config.js
+                '''
+
+                sh "npx commitlint --from ${env.PR_BASE_SHA} --to ${env.PR_HEAD_SHA} --verbose"
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}

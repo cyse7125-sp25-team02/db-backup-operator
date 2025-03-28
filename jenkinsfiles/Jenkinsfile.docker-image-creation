@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKERHUB_CREDENTIALS = credentials('docker-hub-credentials')
+        DOCKER_IMAGE_NAME = "db-backup-operator"
+        DOCKERHUB_USERNAME = "karanthakkar09"
+        GITHUB_TOKEN = credentials('github-token')
+    }
+
+    stages {
+        stage('Semantic Git Release') {
+            steps {
+                script {
+                    sh 'npm install'
+                    sh 'npx semantic-release'
+                    def latestTag = sh(script: 'git describe --tags --abbrev=0', returnStdout: true).trim()
+                    def appVersion = latestTag.startsWith('v') ? latestTag.substring(1) : latestTag
+                    echo "Latest Tag: ${latestTag}, App Version: ${appVersion}"
+                    env.APP_VERSION = appVersion
+                }
+            }
+        }
+
+        stage('Build Docker Builder Image') {
+            steps {
+                script {
+                    sh """
+                        docker buildx create --name mybuilder --use
+                        docker buildx inspect --bootstrap
+                    """
+                }
+            }
+        }
+
+        stage('Build and Push Docker Image') {
+            steps {
+                script {
+                    sh """
+                        echo \$DOCKERHUB_CREDENTIALS_PSW | docker login -u \$DOCKERHUB_CREDENTIALS_USR --password-stdin
+                        docker buildx build \\
+                            --platform linux/amd64,linux/arm64 \\
+                            -t ${DOCKERHUB_USERNAME}/${DOCKER_IMAGE_NAME}:${env.APP_VERSION} \\
+                            -t ${DOCKERHUB_USERNAME}/${DOCKER_IMAGE_NAME}:latest \\
+                            --push .
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                sh """
+                    docker buildx rm mybuilder || true
+                    docker system prune -f
+                    docker logout
+                """
+                cleanWs()
+            }
+        }
+        success {
+            echo "Pipeline completed successfully! Docker image ${DOCKERHUB_USERNAME}/${DOCKER_IMAGE_NAME}:${env.APP_VERSION} pushed to Docker Hub."
+        }
+        failure {
+            echo "Pipeline failed. Check the logs for details."
+        }
+    }
+}

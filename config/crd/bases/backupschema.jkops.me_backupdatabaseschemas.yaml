@@ -1,0 +1,148 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: backupdatabaseschemas.backupschema.jkops.me
+spec:
+  group: backupschema.jkops.me
+  names:
+    kind: BackupDatabaseSchema
+    listKind: BackupDatabaseSchemaList
+    plural: backupdatabaseschemas
+    singular: backupdatabaseschema
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.lastBackupTime
+      name: LastBackupTime
+      type: string
+    - jsonPath: .status.backupLocation
+      name: BackupLocation
+      type: string
+    - jsonPath: .status.backupStatus
+      name: BackupStatus
+      type: string
+    - jsonPath: .status.lastBackupJob
+      name: LastBackupJob
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: BackupDatabaseSchema is the Schema for the backupdatabaseschemas
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BackupDatabaseSchemaSpec defines the desired state of BackupDatabaseSchema
+            properties:
+              backupInterval:
+                description: BackupInterval is the interval in minutes between backups
+                  (e.g., 60 for hourly).
+                format: int32
+                type: integer
+              backupJobNamespace:
+                description: BackupJobNamespace is the Kubernetes namespace where
+                  the operator runs the backup job.
+                type: string
+              dbHost:
+                description: DBHost is the hostname or IP of the database server.
+                type: string
+              dbName:
+                description: DBName is the name of the database.
+                type: string
+              dbPasswordSecretKey:
+                description: DBPasswordSecretKey is the key in the Kubernetes Secret
+                  that holds the database password.
+                type: string
+              dbPasswordSecretName:
+                description: DBPasswordSecretName is the name of the Kubernetes Secret
+                  containing the database password.
+                type: string
+              dbPasswordSecretNamespace:
+                description: DBPasswordSecretNamespace is the namespace of the Kubernetes
+                  Secret containing the database password.
+                type: string
+              dbPort:
+                description: DBPort is the port number of the database server.
+                format: int32
+                type: integer
+              dbSchema:
+                description: DBSchema is the schema name to back up.
+                type: string
+              dbUser:
+                description: DBUser is the username for the database.
+                type: string
+              gcpServiceAccount:
+                description: GCPServiceAccount is the GCP ServiceAccount with access
+                  to the GCS bucket.
+                type: string
+              gcpServiceAccountSecretName:
+                description: GCPServiceAccountSecretName is the name of the Kubernetes
+                  Secret containing the GCP Service Account key (optional).
+                type: string
+              gcsBucket:
+                description: GCSBucket is the name of the Google Cloud Storage bucket
+                  to store the backup.
+                type: string
+              kubeServiceAccount:
+                description: KubeServiceAccount is the Kubernetes ServiceAccount to
+                  use for running the backup workload.
+                type: string
+            required:
+            - backupInterval
+            - backupJobNamespace
+            - dbHost
+            - dbName
+            - dbPasswordSecretKey
+            - dbPasswordSecretName
+            - dbPasswordSecretNamespace
+            - dbPort
+            - dbSchema
+            - dbUser
+            - gcpServiceAccount
+            - gcsBucket
+            - kubeServiceAccount
+            type: object
+          status:
+            description: BackupDatabaseSchemaStatus defines the observed state of
+              BackupDatabaseSchema
+            properties:
+              backupLocation:
+                description: BackupLocation is the full location of the backup in
+                  the GCS bucket.
+                type: string
+              backupStatus:
+                description: BackupStatus is the status of the backup job (e.g., "Success",
+                  "Failed", "Running").
+                type: string
+              lastBackupJob:
+                description: LastBackupJob is the name of the most recent backup job.
+                type: string
+              lastBackupTime:
+                description: LastBackupTime is the UTC time when the last backup job
+                  was run.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
