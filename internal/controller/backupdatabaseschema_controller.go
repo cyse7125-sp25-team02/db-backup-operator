@@ -91,16 +91,6 @@ func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl
 	for _, job := range jobList.Items {
 		log.Info("Processing job", "jobName", job.Name, "Job Status", job.Status)
 
-		// Check if the job is still running
-		if job.Status.Active > 0 {
-			backup.Status.BackupStatus = "Running"
-			if err := r.Status().Update(ctx, backup); err != nil {
-				log.Error(err, "Failed to update BackupDatabaseSchema status to Running")
-				return ctrl.Result{}, err
-			}
-			continue
-		}
-
 		if job.Status.CompletionTime == nil {
 			continue
 		}
@@ -133,7 +123,7 @@ func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
 func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschemav1.BackupDatabaseSchema) (*batchv1.CronJob, error) {
@@ -242,8 +232,9 @@ func mustParseTime(timeStr string) (time.Time, error) {
 }
 
 func (r *BackupDatabaseSchemaReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&backupschemav1.BackupDatabaseSchema{}).
-		Owns(&batchv1.CronJob{}).
-		Complete(r)
+    return ctrl.NewControllerManagedBy(mgr).
+        For(&backupschemav1.BackupDatabaseSchema{}).
+        Owns(&batchv1.CronJob{}).
+        Owns(&batchv1.Job{}).
+        Complete(r)
 }
