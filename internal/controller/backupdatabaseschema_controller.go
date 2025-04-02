@@ -200,6 +200,27 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 							ServiceAccountName: backup.Spec.KubeServiceAccount,
 							RestartPolicy:      corev1.RestartPolicyNever,
 							Containers:         []corev1.Container{container},
+							Affinity: &corev1.Affinity{
+								PodAffinity: &corev1.PodAffinity{
+									PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+										{
+											Weight: 100,
+											PodAffinityTerm: corev1.PodAffinityTerm{
+												LabelSelector: &metav1.LabelSelector{
+													MatchExpressions: []metav1.LabelSelectorRequirement{
+														{
+															Key:      "app.kubernetes.io/name",
+															Operator: metav1.LabelSelectorOpIn,
+															Values:   []string{"api-server"},
+														},
+													},
+												},
+												TopologyKey: "topology.kubernetes.io/zone",
+											},
+										},
+									},
+								},
+							},
 						},
 					},
 				},
