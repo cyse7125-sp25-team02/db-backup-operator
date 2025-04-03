@@ -211,7 +211,7 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 														{
 															Key:      "app.kubernetes.io/name",
 															Operator: metav1.LabelSelectorOpIn,
-															Values:   []string{"api-server"},
+															Values:   []string{"api-server-postgres"},
 														},
 													},
 												},
