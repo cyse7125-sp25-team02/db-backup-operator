@@ -24,15 +24,16 @@ import (
 // BackupDatabaseSchemaReconciler reconciles a BackupDatabaseSchema object
 type BackupDatabaseSchemaReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme     *runtime.Scheme
+	MaxRetries int32
 }
 
 // +kubebuilder:rbac:groups=backupschema.jkops.me,resources=backupdatabaseschemas,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=backupschema.jkops.me,resources=backupdatabaseschemas/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=backupschema.jkops.me,resources=backupdatabaseschemas/finalizers,verbs=update
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;delete
 
 func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
@@ -45,6 +46,8 @@ func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl
 	cronJobName := fmt.Sprintf("backup-%s", backup.Name)
 	cronJob := &batchv1.CronJob{}
 	cronJobKey := types.NamespacedName{Name: cronJobName, Namespace: backup.Spec.BackupJobNamespace}
+
+	// Handle CronJob creation/update
 	if err := r.Get(ctx, cronJobKey, cronJob); err != nil && client.IgnoreNotFound(err) == nil {
 		newCronJob, err := r.createBackupCronJob(backup)
 		if err != nil {
@@ -72,12 +75,14 @@ func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
+	// Handle jobs
 	jobList := &batchv1.JobList{}
 	if err := r.List(ctx, jobList, client.InNamespace(backup.Spec.BackupJobNamespace), client.MatchingLabels{"cronjob-name": cronJobName}); err != nil {
 		log.Error(err, "Failed to list jobs")
 		return ctrl.Result{}, err
 	}
 
+	// Sort jobs by completion time
 	sort.Slice(jobList.Items, func(i, j int) bool {
 		if jobList.Items[i].Status.CompletionTime == nil {
 			return true
@@ -88,21 +93,18 @@ func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl
 		return jobList.Items[i].Status.CompletionTime.Time.Before(jobList.Items[j].Status.CompletionTime.Time)
 	})
 
-	for _, job := range jobList.Items {
-		log.Info("Processing job", "jobName", job.Name, "Job Status", job.Status)
-
-		if job.Status.CompletionTime == nil {
-			continue
-		}
-
-		log.Info("Processing job", "jobName", job.Name)
-
-		lastTime, err := mustParseTime(backup.Status.LastBackupTime)
-		if backup.Status.LastBackupTime == "" || (err == nil && job.Status.CompletionTime.Time.After(lastTime)) {
-			backup.Status.LastBackupTime = job.Status.CompletionTime.Time.UTC().Format(time.RFC3339)
-			backup.Status.LastBackupJob = job.Name
-
-			if job.Status.Succeeded > 0 {
+	failedJobs := []batchv1.Job{}
+	for i, job := range jobList.Items {
+		if job.Status.CompletionTime != nil && job.Status.Succeeded > 0 {
+			// Delete successful jobs
+			if err := r.Delete(ctx, &jobList.Items[i]); err != nil {
+				log.Error(err, "Failed to delete successful job", "jobName", job.Name)
+			}
+			// Update status for successful job before deletion
+			lastTime, err := mustParseTime(backup.Status.LastBackupTime)
+			if backup.Status.LastBackupTime == "" || (err == nil && job.Status.CompletionTime.Time.After(lastTime)) {
+				backup.Status.LastBackupTime = job.Status.CompletionTime.Time.UTC().Format(time.RFC3339)
+				backup.Status.LastBackupJob = job.Name
 				backup.Status.BackupStatus = "Success"
 				
 				parts := strings.Split(job.Name, "-")
@@ -111,16 +113,51 @@ func (r *BackupDatabaseSchemaReconciler) Reconcile(ctx context.Context, req ctrl
 					fileName := fmt.Sprintf("%s.sql", timestamp)
 					backup.Status.BackupLocation = fmt.Sprintf("gs://%s/%s", backup.Spec.GCSBucket, fileName)
 				}
-			} else {
+			}
+			continue
+		}
+
+		if job.Status.Failed > 0 {
+			failedJobs = append(failedJobs, job)
+			// Handle retries
+			if job.Status.Failed <= r.MaxRetries {
+				newJob := job.DeepCopy()
+				newJob.ObjectMeta = metav1.ObjectMeta{
+					Name:      fmt.Sprintf("%s-retry-%d", job.Name, job.Status.Failed),
+					Namespace: job.Namespace,
+					Labels:    job.Labels,
+				}
+				newJob.Status = batchv1.JobStatus{} // Reset status for new job
+				if err := r.Create(ctx, newJob); err != nil {
+					log.Error(err, "Failed to create retry job", "jobName", newJob.Name)
+				}
+			}
+			// Update status for failed job
+			lastTime, err := mustParseTime(backup.Status.LastBackupTime)
+			if backup.Status.LastBackupTime == "" || (err == nil && job.Status.CompletionTime.Time.After(lastTime)) {
+				backup.Status.LastBackupTime = job.Status.CompletionTime.Time.UTC().Format(time.RFC3339)
+				backup.Status.LastBackupJob = job.Name
 				backup.Status.BackupStatus = "Failed"
 				backup.Status.BackupLocation = ""
 			}
+		}
+	}
 
-			if err := r.Status().Update(ctx, backup); err != nil {
-				log.Error(err, "Failed to update BackupDatabaseSchema status")
-				return ctrl.Result{}, err
+	// Clean up excess failed jobs (keep only 3 most recent)
+	if len(failedJobs) > 3 {
+		sort.Slice(failedJobs, func(i, j int) bool {
+			return failedJobs[i].Status.CompletionTime.Time.Before(failedJobs[j].Status.CompletionTime.Time)
+		})
+		for i := 0; i < len(failedJobs)-3; i++ {
+			if err := r.Delete(ctx, &failedJobs[i]); err != nil {
+				log.Error(err, "Failed to delete old failed job", "jobName", failedJobs[i].Name)
 			}
 		}
+	}
+
+	if err := r.Status().Update(ctx, backup); err != nil {
+		log.Error(err, "Failed to update BackupDatabaseSchema status")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
@@ -130,7 +167,6 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 	interval := backup.Spec.BackupInterval
 	cronSchedule := fmt.Sprintf("*/%d * * * *", interval)
 
-	// Use JOB_NAME and strip pod suffix to match job name
 	backupCommand := fmt.Sprintf(
 		"export JOB_NAME=$(echo $POD_NAME | sed 's/-[a-z0-9]*$//'); timestamp=$(echo $JOB_NAME | awk -F'-' '{print $NF}'); pg_dump -h %s -p %d -U %s -n %s %s | gsutil cp - gs://%s/$timestamp.sql",
 		backup.Spec.DBHost, backup.Spec.DBPort, backup.Spec.DBUser,
@@ -188,17 +224,18 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 		Spec: batchv1.CronJobSpec{
 			Schedule:                   cronSchedule,
 			ConcurrencyPolicy:          batchv1.ForbidConcurrent,
-			SuccessfulJobsHistoryLimit: ptr.To[int32](10),
-			FailedJobsHistoryLimit:     ptr.To[int32](10),
+			SuccessfulJobsHistoryLimit: ptr.To[int32](0),
+			FailedJobsHistoryLimit:     ptr.To[int32](3),
 			JobTemplate: batchv1.JobTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{"cronjob-name": fmt.Sprintf("backup-%s", backup.Name)},
 				},
 				Spec: batchv1.JobSpec{
+					BackoffLimit: ptr.To[int32](3),
 					Template: corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							ServiceAccountName: backup.Spec.KubeServiceAccount,
-							RestartPolicy:      corev1.RestartPolicyNever,
+							RestartPolicy:      corev1.RestartPolicyOnFailure,
 							Containers:         []corev1.Container{container},
 							Affinity: &corev1.Affinity{
 								PodAffinity: &corev1.PodAffinity{
@@ -253,9 +290,11 @@ func mustParseTime(timeStr string) (time.Time, error) {
 }
 
 func (r *BackupDatabaseSchemaReconciler) SetupWithManager(mgr ctrl.Manager) error {
-    return ctrl.NewControllerManagedBy(mgr).
-        For(&backupschemav1.BackupDatabaseSchema{}).
-        Owns(&batchv1.CronJob{}).
-        Owns(&batchv1.Job{}).
-        Complete(r)
+	r.MaxRetries = 3
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&backupschemav1.BackupDatabaseSchema{}).
+		Owns(&batchv1.CronJob{}).
+		Owns(&batchv1.Job{}).
+		Owns(&corev1.Pod{}).
+		Complete(r)
 }
