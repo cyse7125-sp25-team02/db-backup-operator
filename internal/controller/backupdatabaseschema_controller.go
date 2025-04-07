@@ -168,7 +168,7 @@ func (r *BackupDatabaseSchemaReconciler) createBackupCronJob(backup *backupschem
 	cronSchedule := fmt.Sprintf("*/%d * * * *", interval)
 
 	backupCommand := fmt.Sprintf(
-		"export JOB_NAME=$(echo $POD_NAME | sed 's/-[a-z0-9]*$//'); timestamp=$(echo $JOB_NAME | awk -F'-' '{print $NF}'); pg_dump -h %s -p %d -U %s -n %s %s | gsutil cp - gs://%s/$timestamp.sql",
+		"export JOB_NAME=$(echo $POD_NAME | sed 's/-[a-z0-9]*$//'); timestamp=$(echo $JOB_NAME | awk -F'-' '{print $NF}'); pg_dump -h %s -p %d -U %s -n %s %s | gsutil cp - gs://%s/$timestamp.sql && curl -X POST http://localhost:15020/quitquitquit",
 		backup.Spec.DBHost, backup.Spec.DBPort, backup.Spec.DBUser,
 		backup.Spec.DBSchema, backup.Spec.DBName, backup.Spec.GCSBucket,
 	)
